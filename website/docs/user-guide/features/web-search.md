@@ -24,6 +24,7 @@ All three are configured through a single backend selection. Providers are chose
 | **Tavily** | `TAVILY_API_KEY` | ✔ | ✔ | ✔ | 1 000 searches/mo |
 | **Exa** | `EXA_API_KEY` | ✔ | ✔ | — | 1 000 searches/mo |
 | **Parallel** | `PARALLEL_API_KEY` | ✔ | ✔ | — | Paid |
+| **Gemini Grounding** | `GEMINI_GROUNDING_API_KEY` | ✔ (LLM-grounded; returns synthesized `answer` + sources) | — | — | Paid (LLM-call billed) |
 
 **Per-capability split:** you can use different providers for search and extract independently — for example SearXNG (free) for search and Firecrawl for extract. See [Per-capability configuration](#per-capability-configuration) below.
 
@@ -232,6 +233,32 @@ Get access at [parallel.ai](https://parallel.ai).
 
 ---
 
+### Gemini Grounding (LLM-grounded, search only)
+
+Search via Google Gemini's `google_search` grounding tool. Each query is a full Gemini inference that returns a synthesized `answer` plus URL citations. Pair with another extract provider (Firecrawl, Tavily, Exa, Parallel) when you also need `web_extract`/`web_crawl`.
+
+```bash
+# ~/.hermes/.env
+GEMINI_GROUNDING_API_KEY=AIza-your-grounding-key-here
+# optional — defaults to gemini-2.5-flash
+# GEMINI_GROUNDING_MODEL=gemini-2.5-pro
+```
+
+```yaml
+# ~/.hermes/config.yaml
+web:
+  search_backend: "gemini-grounding"
+  extract_backend: "firecrawl"     # any extract-capable provider
+```
+
+The key is intentionally separate from `GEMINI_API_KEY`/`GOOGLE_API_KEY` so grounding billing/quota stays isolated. Get a key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+
+:::caution Cost & latency
+Each `web_search` call is a full LLM inference (2~8 s typical, plus URL-redirect resolution). Roughly 10~100× the cost of a plain search API. The synthesized `answer` is **untrusted external content** — agents should treat it as data, not as instructions.
+:::
+
+---
+
 ## Configuration
 
 ### Single backend
@@ -241,7 +268,7 @@ Set one provider for all web capabilities:
 ```yaml
 # ~/.hermes/config.yaml
 web:
-  backend: "searxng"   # firecrawl | searxng | tavily | exa | parallel
+  backend: "searxng"   # firecrawl | searxng | tavily | exa | parallel | gemini-grounding
 ```
 
 ### Per-capability configuration
@@ -273,6 +300,7 @@ If no backend is explicitly configured, Hermes picks the first available one bas
 | `TAVILY_API_KEY` | tavily |
 | `EXA_API_KEY` | exa |
 | `SEARXNG_URL` | searxng |
+| `GEMINI_GROUNDING_API_KEY` (last resort — only when no other key is set) | gemini-grounding |
 
 ---
 

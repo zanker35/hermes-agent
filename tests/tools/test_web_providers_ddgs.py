@@ -187,11 +187,16 @@ class TestDDGSBackendWiring:
         monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: True)
         assert web_tools._get_backend() == "exa"
 
-    def test_auto_detect_picks_ddgs_as_last_resort(self, monkeypatch):
+    def test_auto_detect_picks_ddgs_when_only_ddgs_available(self, monkeypatch):
+        """ddgs is picked when no paid/free-search keys are set — even though
+        gemini-grounding now sits below ddgs in the candidate list, it requires
+        an explicit ``GEMINI_GROUNDING_API_KEY`` which is unset here.
+        """
         from tools import web_tools
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {})
         for key in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL", "PARALLEL_API_KEY",
-                    "TAVILY_API_KEY", "EXA_API_KEY", "SEARXNG_URL", "BRAVE_SEARCH_API_KEY"):
+                    "TAVILY_API_KEY", "EXA_API_KEY", "SEARXNG_URL", "BRAVE_SEARCH_API_KEY",
+                    "GEMINI_GROUNDING_API_KEY"):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setattr(web_tools, "_is_tool_gateway_ready", lambda: False)
         monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: True)

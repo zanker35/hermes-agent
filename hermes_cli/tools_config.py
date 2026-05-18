@@ -325,6 +325,15 @@ TOOL_CATEGORIES = {
                 "env_vars": [],
                 "post_setup": "ddgs",
             },
+            {
+                "name": "Gemini Grounding Search",
+                "badge": "paid · LLM-grounded · search only",
+                "tag": "Search via Google Gemini's google_search grounding tool — returns synthesized answer + sources (pair with any extract provider)",
+                "web_backend": "gemini-grounding",
+                "env_vars": [
+                    {"key": "GEMINI_GROUNDING_API_KEY", "prompt": "Gemini API key for grounding (separate from GEMINI_API_KEY)", "url": "https://aistudio.google.com/app/apikey"},
+                ],
+            },
         ],
     },
     "image_gen": {
