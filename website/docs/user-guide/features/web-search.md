@@ -240,8 +240,8 @@ Search via Google Gemini's `google_search` grounding tool. Each query is a full 
 ```bash
 # ~/.hermes/.env
 GEMINI_GROUNDING_API_KEY=AIza-your-grounding-key-here
-# optional — defaults to gemini-2.5-flash
-# GEMINI_GROUNDING_MODEL=gemini-2.5-pro
+# optional — defaults to gemini-3.1-flash-lite
+# GEMINI_GROUNDING_MODEL=gemini-3.1-flash-lite
 ```
 
 ```yaml

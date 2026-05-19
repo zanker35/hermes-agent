@@ -16,7 +16,7 @@ Configuration::
     GEMINI_GROUNDING_API_KEY=AIza...
 
     # ~/.hermes/.env  (optional overrides)
-    GEMINI_GROUNDING_MODEL=gemini-2.5-flash      # default
+    # GEMINI_GROUNDING_MODEL=gemini-3.1-flash-lite
     GEMINI_GROUNDING_BASE_URL=...                # escape hatch for proxies
 
     # ~/.hermes/config.yaml
@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 _REQUEST_TIMEOUT = 60.0
 _REDIRECT_TIMEOUT = 5.0
 

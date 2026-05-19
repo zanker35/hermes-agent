@@ -1903,7 +1903,7 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
     "GEMINI_GROUNDING_MODEL": {
-        "description": "Gemini model to use for grounding (defaults to gemini-2.5-flash)",
+        "description": "Gemini model to use for grounding (defaults to gemini-3.1-flash-lite)",
         "prompt": "Gemini grounding model (leave empty for default)",
         "url": None,
         "tools": ["web_search"],

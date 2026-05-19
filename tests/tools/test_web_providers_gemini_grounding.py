@@ -464,10 +464,10 @@ class TestGeminiGroundingProviderSearch:
         assert "AIzaSyXXXXX" not in result["error"]
         assert "key=***" in result["error"]
 
-    def test_custom_model_via_env(self, monkeypatch):
+    def test_model_via_env(self, monkeypatch):
         from tools.web_providers.gemini_grounding import GeminiGroundingSearchProvider
 
-        monkeypatch.setenv("GEMINI_GROUNDING_MODEL", "gemini-2.5-pro")
+        monkeypatch.setenv("GEMINI_GROUNDING_MODEL", "gemini-3.1-flash-lite")
         sample = _sample_response(num_chunks=0)
         post_resp = _make_mock_post_response(json_data=sample)
         patcher, mock_client = _patched_client(post_resp=post_resp)
@@ -477,7 +477,21 @@ class TestGeminiGroundingProviderSearch:
             patcher.stop()
 
         url_arg = mock_client.post.call_args.args[0]
-        assert "gemini-2.5-pro" in url_arg
+        assert "gemini-3.1-flash-lite" in url_arg
+
+    def test_default_model_uses_flash_lite(self):
+        from tools.web_providers.gemini_grounding import GeminiGroundingSearchProvider
+
+        sample = _sample_response(num_chunks=0)
+        post_resp = _make_mock_post_response(json_data=sample)
+        patcher, mock_client = _patched_client(post_resp=post_resp)
+        try:
+            GeminiGroundingSearchProvider().search("query")
+        finally:
+            patcher.stop()
+
+        url_arg = mock_client.post.call_args.args[0]
+        assert "/models/gemini-3.1-flash-lite:generateContent" in url_arg
 
     def test_custom_base_url_via_env(self, monkeypatch):
         from tools.web_providers.gemini_grounding import GeminiGroundingSearchProvider
