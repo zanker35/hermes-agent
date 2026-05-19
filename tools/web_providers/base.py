@@ -44,7 +44,7 @@ class WebSearchProvider(ABC):
         """
 
     @abstractmethod
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """Execute a web search and return normalized results."""
 
 

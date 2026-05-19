@@ -42,7 +42,7 @@ class TestWebProviderABCs:
                 return "dummy"
             def is_configured(self) -> bool:
                 return True
-            def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+            def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
                 return {"success": True, "data": {"web": []}}
 
         d = Dummy()

@@ -169,7 +169,7 @@ class GeminiGroundingSearchProvider(WebSearchProvider):
         """Return True when ``GEMINI_GROUNDING_API_KEY`` is set to a non-empty value."""
         return bool(os.getenv("GEMINI_GROUNDING_API_KEY", "").strip())
 
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """Execute a grounded search via Gemini.
 
         Returns::

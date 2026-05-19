@@ -102,7 +102,7 @@ def check_sandbox_requirements() -> bool:
 _TOOL_STUBS = {
     "web_search": (
         "web_search",
-        "query: str, limit: int = 5",
+        "query: str, limit: int = 100",
         '"""Search the web. Returns dict with data.web list of {url, title, description}."""',
         '{"query": query, "limit": limit}',
     ),
@@ -1487,7 +1487,7 @@ def _resolve_child_cwd(mode: str, staging_dir: str) -> str:
 # Ordered to match the canonical display order.
 _TOOL_DOC_LINES = [
     ("web_search",
-     "  web_search(query: str, limit: int = 5) -> dict\n"
+     "  web_search(query: str, limit: int = 100) -> dict\n"
      "    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}"),
     ("web_extract",
      "  web_extract(urls: list[str]) -> dict\n"
