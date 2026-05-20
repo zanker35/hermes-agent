@@ -99,6 +99,8 @@ try:
         P2ImMessageMessageReadV1,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
+        PatchMessageRequest,
+        PatchMessageRequestBody,
         UpdateMessageRequest,
         UpdateMessageRequestBody,
     )
@@ -149,19 +151,22 @@ logger = logging.getLogger(__name__)
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-_MARKDOWN_HINT_RE = re.compile(
-    r"(^#{1,6}\s)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(^\s*---+\s*$)|(```)|(`[^`\n]+`)|(\*\*[^*\n].+?\*\*)|(~~[^~\n].+?~~)|(<u>.+?</u>)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)]+\))|(^>\s)",
+# Detect GitHub-flavored markdown tables. Feishu post-type 'md' elements do
+# not render tables reliably, so outbound table replies are upgraded to cards.
+_MARKDOWN_TABLE_RE = re.compile(
+    r"^\s*\|?.+\|.+\|?\s*\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$",
     re.MULTILINE,
 )
-# Detect markdown tables: a line starting with | followed by a separator line.
-# Feishu post-type 'md' elements do not render tables, so we force text mode.
-_MARKDOWN_TABLE_RE = re.compile(r"^\|.*\|\n\|[-|: ]+\|", re.MULTILINE)
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _MARKDOWN_FENCE_OPEN_RE = re.compile(r"^```([^\n`]*)\s*$")
 _MARKDOWN_FENCE_CLOSE_RE = re.compile(r"^```\s*$")
 _MENTION_RE = re.compile(r"@_user_\d+")
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
 _POST_CONTENT_INVALID_RE = re.compile(r"content format of the post type is incorrect", re.IGNORECASE)
+_INTERACTIVE_CONTENT_INVALID_RE = re.compile(
+    r"(invalid\s+(?:card|content|payload|schema)|card\s+(?:content|schema)\s+(?:invalid|error)|content\s+format\s+of\s+the\s+(?:interactive|card)\s+type\s+is\s+incorrect)",
+    re.IGNORECASE,
+)
 # ---------------------------------------------------------------------------
 # Media type sets and upload constants
 # ---------------------------------------------------------------------------
@@ -213,6 +218,13 @@ _FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS = 30          # max seconds to read request
 _FEISHU_WEBHOOK_ANOMALY_THRESHOLD = 25             # consecutive error responses before WARNING log
 _FEISHU_WEBHOOK_ANOMALY_TTL_SECONDS = 6 * 60 * 60  # anomaly tracker TTL (6 hours) — matches openclaw
 _FEISHU_CARD_ACTION_DEDUP_TTL_SECONDS = 15 * 60    # card action token dedup window (15 min)
+_FEISHU_CARD_MAX_TABLES = 5
+_FEISHU_CARD_MAX_TABLE_COLUMNS = 50
+_FEISHU_CARD_CELL_MAX_CHARS = 500
+_FEISHU_CARD_MARKDOWN_MAX_CHARS = 2000
+_FEISHU_CARD_MAX_PAYLOAD_BYTES = 28 * 1024
+_FEISHU_CARD_TRUNCATION_NOTICE = "\n\n_内容过长，已截断显示。完整内容可在纯文本 fallback 中查看。_"
+_FEISHU_CARD_SIZE_MARGIN_BYTES = 1024
 
 _APPROVAL_CHOICE_MAP: Dict[str, str] = {
     "approve_once": "once",
@@ -344,6 +356,19 @@ class FeishuPostParseResult:
     text_content: str
     image_keys: List[str] = field(default_factory=list)
     media_refs: List[FeishuPostMediaRef] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FeishuMarkdownTable:
+    headers: List[str]
+    rows: List[List[str]]
+
+
+@dataclass(frozen=True)
+class FeishuMarkdownTableSegment:
+    kind: Literal["text", "table"]
+    text: str = ""
+    table: Optional[FeishuMarkdownTable] = None
 
 
 @dataclass(frozen=True)
@@ -605,6 +630,295 @@ def _build_markdown_post_rows(content: str) -> List[List[Dict[str, str]]]:
 
     _flush_current()
     return rows or [[{"tag": "md", "text": content}]]
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = _split_markdown_table_row(line)
+    if len(cells) < 2:
+        return False
+    return all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def _looks_like_markdown_table_row(line: str) -> bool:
+    cells = _split_markdown_table_row(line)
+    return len(cells) >= 2
+
+
+def _split_markdown_table_row(line: str) -> List[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+
+    cells: List[str] = []
+    current: List[str] = []
+    escaped = False
+    in_code = False
+    for char in stripped:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "`":
+            in_code = not in_code
+            current.append(char)
+            continue
+        if char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _normalize_markdown_table_row(cells: List[str], width: int) -> List[str]:
+    normalized = list(cells[:width])
+    if len(normalized) < width:
+        normalized.extend("" for _ in range(width - len(normalized)))
+    return normalized
+
+
+def _parse_markdown_table_at(lines: List[str], start: int) -> tuple[Optional[FeishuMarkdownTable], int]:
+    if start + 1 >= len(lines):
+        return None, start
+    if not _looks_like_markdown_table_row(lines[start]) or not _is_markdown_table_separator(lines[start + 1]):
+        return None, start
+
+    headers = _split_markdown_table_row(lines[start])
+    rows: List[List[str]] = []
+    index = start + 2
+    while index < len(lines) and _looks_like_markdown_table_row(lines[index]):
+        rows.append(_normalize_markdown_table_row(_split_markdown_table_row(lines[index]), len(headers)))
+        index += 1
+
+    if not rows:
+        return None, start
+    return FeishuMarkdownTable(headers=headers, rows=rows), index
+
+
+def _markdown_table_has_too_many_columns(content: str) -> bool:
+    lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    in_code_block = False
+    for index, line in enumerate(lines[:-1]):
+        stripped = line.strip()
+        if (
+            _MARKDOWN_FENCE_CLOSE_RE.match(stripped)
+            if in_code_block
+            else _MARKDOWN_FENCE_OPEN_RE.match(stripped)
+        ):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        if _looks_like_markdown_table_row(line) and _is_markdown_table_separator(lines[index + 1]):
+            if len(_split_markdown_table_row(line)) > _FEISHU_CARD_MAX_TABLE_COLUMNS:
+                return True
+    return False
+
+
+def _parse_markdown_table_segments(content: str) -> List[FeishuMarkdownTableSegment]:
+    lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    segments: List[FeishuMarkdownTableSegment] = []
+    text_buffer: List[str] = []
+    in_code_block = False
+    index = 0
+
+    def _flush_text() -> None:
+        if not text_buffer:
+            return
+        text = "\n".join(text_buffer).strip("\n")
+        if text.strip():
+            segments.append(FeishuMarkdownTableSegment(kind="text", text=text))
+        text_buffer.clear()
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if (
+            _MARKDOWN_FENCE_CLOSE_RE.match(stripped)
+            if in_code_block
+            else _MARKDOWN_FENCE_OPEN_RE.match(stripped)
+        ):
+            text_buffer.append(lines[index])
+            in_code_block = not in_code_block
+            index += 1
+            continue
+
+        if not in_code_block:
+            table, next_index = _parse_markdown_table_at(lines, index)
+            if table is not None:
+                _flush_text()
+                segments.append(FeishuMarkdownTableSegment(kind="table", table=table))
+                index = next_index
+                continue
+
+        text_buffer.append(lines[index])
+        index += 1
+
+    _flush_text()
+    return segments
+
+
+def _truncate_feishu_card_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _json_size_bytes(value: Dict[str, Any]) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
+def _build_markdown_card_payload_from_text(content: str) -> Optional[str]:
+    text = content.strip()
+    if not text:
+        return None
+
+    def _card_for(value: str) -> Dict[str, Any]:
+        return {
+            "schema": "2.0",
+            "config": {"wide_screen_mode": True, "update_multi": True},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": value[index:index + _FEISHU_CARD_MARKDOWN_MAX_CHARS],
+                    }
+                    for index in range(0, len(value), _FEISHU_CARD_MARKDOWN_MAX_CHARS)
+                ]
+            },
+        }
+
+    card = _card_for(text)
+    if _json_size_bytes(card) <= _FEISHU_CARD_MAX_PAYLOAD_BYTES:
+        return json.dumps(card, ensure_ascii=False)
+
+    low = 0
+    high = len(text)
+    best = ""
+    budget = _FEISHU_CARD_MAX_PAYLOAD_BYTES - _FEISHU_CARD_SIZE_MARGIN_BYTES
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = text[:mid].rstrip() + _FEISHU_CARD_TRUNCATION_NOTICE
+        if _json_size_bytes(_card_for(candidate)) <= budget:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    if not best:
+        best = _FEISHU_CARD_TRUNCATION_NOTICE.strip()
+    card = _card_for(best)
+    if _json_size_bytes(card) > _FEISHU_CARD_MAX_PAYLOAD_BYTES:
+        return None
+    return json.dumps(card, ensure_ascii=False)
+
+
+def _build_feishu_table_card_payload(content: str) -> Optional[str]:
+    if _markdown_table_has_too_many_columns(content):
+        return None
+
+    segments = _parse_markdown_table_segments(content)
+    table_count = sum(1 for segment in segments if segment.kind == "table")
+    if not table_count:
+        return None
+    if any(
+        segment.table is not None and len(segment.table.headers) > _FEISHU_CARD_MAX_TABLE_COLUMNS
+        for segment in segments
+    ):
+        return None
+
+    elements: List[Dict[str, Any]] = []
+    rendered_tables = 0
+    omitted_tables = 0
+    for segment in segments:
+        if segment.kind == "text":
+            text = _truncate_feishu_card_text(segment.text.strip(), _FEISHU_CARD_MARKDOWN_MAX_CHARS)
+            if text:
+                elements.append({"tag": "markdown", "content": text})
+            continue
+
+        table = segment.table
+        if table is None:
+            continue
+        if rendered_tables >= _FEISHU_CARD_MAX_TABLES:
+            omitted_tables += 1
+            continue
+
+        column_names = [f"col_{index + 1}" for index in range(len(table.headers))]
+        columns = [
+            {
+                "name": name,
+                "display_name": _truncate_feishu_card_text(header or f"Column {index + 1}", 120),
+                "data_type": "text",
+                "width": "auto",
+                "vertical_align": "top",
+                "horizontal_align": "left",
+            }
+            for index, (name, header) in enumerate(zip(column_names, table.headers))
+        ]
+        rows = [
+            {
+                name: _truncate_feishu_card_text(cell, _FEISHU_CARD_CELL_MAX_CHARS)
+                for name, cell in zip(column_names, _normalize_markdown_table_row(row, len(column_names)))
+            }
+            for row in table.rows
+        ]
+        elements.append(
+            {
+                "tag": "table",
+                "element_id": f"table_{rendered_tables + 1}",
+                "page_size": min(10, max(1, len(rows))),
+                "row_height": "auto",
+                "row_max_height": "120px",
+                "freeze_first_column": bool(columns),
+                "header_style": {
+                    "text_align": "left",
+                    "text_size": "normal",
+                    "background_style": "none",
+                    "text_color": "default",
+                    "bold": True,
+                    "lines": 1,
+                },
+                "columns": columns,
+                "rows": rows,
+            }
+        )
+        rendered_tables += 1
+
+    if omitted_tables:
+        elements.append(
+            {
+                "tag": "markdown",
+                "content": f"_Omitted {omitted_tables} additional table(s); Feishu cards support up to 5 tables._",
+            }
+        )
+
+    if not any(element.get("tag") == "table" for element in elements):
+        return None
+
+    card = {
+        "schema": "2.0",
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "body": {"elements": elements},
+    }
+    payload = json.dumps(card, ensure_ascii=False)
+    if len(payload.encode("utf-8")) > _FEISHU_CARD_MAX_PAYLOAD_BYTES:
+        return None
+    return payload
+
+
+def _build_feishu_response_card_payload(content: str) -> Optional[str]:
+    table_payload = _build_feishu_table_card_payload(content)
+    if table_payload:
+        return table_payload
+    return _build_markdown_card_payload_from_text(content)
 
 
 def parse_feishu_post_payload(
@@ -1721,26 +2035,25 @@ class FeishuAdapter(BasePlatformAdapter):
                         metadata=metadata,
                     )
                 except Exception as exc:
-                    if msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
+                    if not self._should_fallback_to_text(msg_type, str(exc)):
                         raise
-                    logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
+                    logger.warning("[Feishu] %s payload rejected by API; falling back to plain text", msg_type)
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
                         msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                        payload=self._build_fallback_text_payload(chunk, msg_type),
                         reply_to=reply_to,
                         metadata=metadata,
                     )
                 if (
-                    msg_type == "post"
-                    and not self._response_succeeded(response)
-                    and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))
+                    not self._response_succeeded(response)
+                    and self._should_fallback_to_text(msg_type, str(getattr(response, "msg", "") or ""))
                 ):
-                    logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
+                    logger.warning("[Feishu] %s payload rejected by API response; falling back to plain text", msg_type)
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
                         msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                        payload=self._build_fallback_text_payload(chunk, msg_type),
                         reply_to=reply_to,
                         metadata=metadata,
                     )
@@ -1766,15 +2079,20 @@ class FeishuAdapter(BasePlatformAdapter):
         content = self.format_message(content)
         try:
             msg_type, payload = self._build_outbound_payload(content)
-            body = self._build_update_message_body(msg_type=msg_type, content=payload)
-            request = self._build_update_message_request(message_id=message_id, request_body=body)
-            response = await asyncio.to_thread(self._client.im.v1.message.update, request)
+            if msg_type == "interactive":
+                body = self._build_patch_message_body(content=payload)
+                request = self._build_patch_message_request(message_id=message_id, request_body=body)
+                response = await asyncio.to_thread(self._client.im.v1.message.patch, request)
+            else:
+                body = self._build_update_message_body(msg_type=msg_type, content=payload)
+                request = self._build_update_message_request(message_id=message_id, request_body=body)
+                response = await asyncio.to_thread(self._client.im.v1.message.update, request)
             result = self._finalize_send_result(response, "update failed")
-            if not result.success and msg_type == "post" and _POST_CONTENT_INVALID_RE.search(result.error or ""):
-                logger.warning("[Feishu] Invalid post update payload rejected by API; falling back to plain text")
+            if not result.success and msg_type != "interactive" and self._should_fallback_to_text(msg_type, result.error or ""):
+                logger.warning("[Feishu] %s update payload rejected by API response; falling back to plain text", msg_type)
                 fallback_body = self._build_update_message_body(
                     msg_type="text",
-                    content=json.dumps({"text": _strip_markdown_to_plain_text(content)}, ensure_ascii=False),
+                    content=self._build_fallback_text_payload(content, msg_type),
                 )
                 fallback_request = self._build_update_message_request(message_id=message_id, request_body=fallback_body)
                 fallback_response = await asyncio.to_thread(self._client.im.v1.message.update, fallback_request)
@@ -1969,27 +2287,22 @@ class FeishuAdapter(BasePlatformAdapter):
                     override_error="Feishu image upload missing image_key",
                 )
 
-            if caption:
-                post_payload = self._build_media_post_payload(
+            message_response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="image",
+                payload=json.dumps({"image_key": image_key}, ensure_ascii=False),
+                reply_to=reply_to,
+                metadata=metadata,
+            )
+            result = self._finalize_send_result(message_response, "image send failed")
+            if result.success and caption:
+                await self._send_caption_card(
+                    chat_id=chat_id,
                     caption=caption,
-                    media_tag={"tag": "img", "image_key": image_key},
-                )
-                message_response = await self._feishu_send_with_retry(
-                    chat_id=chat_id,
-                    msg_type="post",
-                    payload=post_payload,
-                    reply_to=reply_to,
+                    reply_to=result.message_id or reply_to,
                     metadata=metadata,
                 )
-            else:
-                message_response = await self._feishu_send_with_retry(
-                    chat_id=chat_id,
-                    msg_type="image",
-                    payload=json.dumps({"image_key": image_key}, ensure_ascii=False),
-                    reply_to=reply_to,
-                    metadata=metadata,
-                )
-            return self._finalize_send_result(message_response, "image send failed")
+            return result
         except Exception as exc:
             logger.error("[Feishu] Failed to send image %s: %s", image_path, exc, exc_info=True)
             return SendResult(success=False, error=str(exc))
@@ -4005,16 +4318,71 @@ class FeishuAdapter(BasePlatformAdapter):
     # =========================================================================
 
     def _build_outbound_payload(self, content: str) -> tuple[str, str]:
-        # Feishu post-type 'md' elements do not render markdown tables; sending
-        # table content as post causes the message to appear blank on the client.
-        # Force plain text for anything that looks like a markdown table.
-        if _MARKDOWN_TABLE_RE.search(content):
-            text_payload = {"text": content}
-            return "text", json.dumps(text_payload, ensure_ascii=False)
-        if _MARKDOWN_HINT_RE.search(content):
-            return "post", _build_markdown_post_payload(content)
+        card_payload = _build_feishu_response_card_payload(content)
+        if card_payload:
+            return "interactive", card_payload
+        logger.warning("[Feishu] Response could not be converted to card; falling back to plain text")
+        return self._build_text_payload(content)
+
+    @staticmethod
+    def _build_text_payload(content: str) -> tuple[str, str]:
         text_payload = {"text": content}
         return "text", json.dumps(text_payload, ensure_ascii=False)
+
+    @staticmethod
+    def _should_fallback_to_text(msg_type: str, error_text: str = "") -> bool:
+        if msg_type == "interactive":
+            return _INTERACTIVE_CONTENT_INVALID_RE.search(error_text or "") is not None
+        return msg_type == "post" and _POST_CONTENT_INVALID_RE.search(error_text or "") is not None
+
+    @staticmethod
+    def _build_fallback_text_payload(content: str, original_msg_type: str) -> str:
+        text = _strip_markdown_to_plain_text(content)
+        return json.dumps({"text": text}, ensure_ascii=False)
+
+    async def _send_caption_card(
+        self,
+        *,
+        chat_id: str,
+        caption: str,
+        reply_to: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        msg_type, payload = self._build_outbound_payload(caption)
+        try:
+            response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type=msg_type,
+                payload=payload,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            if not self._should_fallback_to_text(msg_type, str(exc)):
+                logger.warning("[Feishu] Caption card send failed: %s", exc)
+                return
+            logger.warning("[Feishu] Caption card rejected; falling back to plain text")
+            await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="text",
+                payload=self._build_fallback_text_payload(caption, msg_type),
+                reply_to=reply_to,
+                metadata=metadata,
+            )
+            return
+
+        if not self._response_succeeded(response) and self._should_fallback_to_text(
+            msg_type,
+            str(getattr(response, "msg", "") or ""),
+        ):
+            logger.warning("[Feishu] Caption card rejected by API response; falling back to plain text")
+            await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="text",
+                payload=self._build_fallback_text_payload(caption, msg_type),
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
     async def _send_uploaded_file_message(
         self,
@@ -4054,28 +4422,22 @@ class FeishuAdapter(BasePlatformAdapter):
                     override_error="Feishu file upload missing file_key",
                 )
 
-            if caption:
-                media_tag = {
-                    "tag": "media",
-                    "file_key": file_key,
-                    "file_name": display_name,
-                }
-                message_response = await self._feishu_send_with_retry(
+            message_response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type=resolved_message_type,
+                payload=json.dumps({"file_key": file_key}, ensure_ascii=False),
+                reply_to=reply_to,
+                metadata=metadata,
+            )
+            result = self._finalize_send_result(message_response, "file send failed")
+            if result.success and caption:
+                await self._send_caption_card(
                     chat_id=chat_id,
-                    msg_type="post",
-                    payload=self._build_media_post_payload(caption=caption, media_tag=media_tag),
-                    reply_to=reply_to,
+                    caption=caption,
+                    reply_to=result.message_id or reply_to,
                     metadata=metadata,
                 )
-            else:
-                message_response = await self._feishu_send_with_retry(
-                    chat_id=chat_id,
-                    msg_type=resolved_message_type,
-                    payload=json.dumps({"file_key": file_key}, ensure_ascii=False),
-                    reply_to=reply_to,
-                    metadata=metadata,
-                )
-            return self._finalize_send_result(message_response, "file send failed")
+            return result
         except Exception as exc:
             logger.error("[Feishu] Failed to send file %s: %s", file_path, exc, exc_info=True)
             return SendResult(success=False, error=str(exc))
@@ -4286,7 +4648,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 return response
             except Exception as exc:
                 last_error = exc
-                if msg_type == "post" and _POST_CONTENT_INVALID_RE.search(str(exc)):
+                if self._should_fallback_to_text(msg_type, str(exc)):
                     raise
                 if attempt >= _FEISHU_SEND_ATTEMPTS - 1:
                     raise
@@ -4403,6 +4765,23 @@ class FeishuAdapter(BasePlatformAdapter):
         return SimpleNamespace(message_id=message_id, request_body=request_body)
 
     @staticmethod
+    def _build_patch_message_body(*, content: str) -> Any:
+        if "PatchMessageRequestBody" in globals():
+            return PatchMessageRequestBody.builder().content(content).build()
+        return SimpleNamespace(content=content)
+
+    @staticmethod
+    def _build_patch_message_request(message_id: str, request_body: Any) -> Any:
+        if "PatchMessageRequest" in globals():
+            return (
+                PatchMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(request_body)
+                .build()
+            )
+        return SimpleNamespace(message_id=message_id, request_body=request_body)
+
+    @staticmethod
     def _build_create_message_body(*, receive_id: str, msg_type: str, content: str, uuid_value: str) -> Any:
         if "CreateMessageRequestBody" in globals():
             return (
@@ -4468,12 +4847,6 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def _build_post_payload(self, content: str) -> str:
         return _build_markdown_post_payload(content)
-
-    def _build_media_post_payload(self, *, caption: str, media_tag: Dict[str, str]) -> str:
-        payload = json.loads(self._build_post_payload(caption))
-        content = payload.setdefault("zh_cn", {}).setdefault("content", [])
-        content.append([media_tag])
-        return json.dumps(payload, ensure_ascii=False)
 
     @staticmethod
     def _resolve_outbound_file_routing(

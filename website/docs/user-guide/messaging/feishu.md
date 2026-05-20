@@ -20,6 +20,7 @@ The integration supports both connection modes:
 | Direct messages | Hermes responds to every message. |
 | Group chats | Hermes responds only when the bot is @mentioned in the chat. |
 | Shared group chats | By default, session history is isolated per user inside a shared chat. |
+| Replies | Hermes sends text replies, streamed updates, tool progress, and attachment captions as interactive cards. Native images, files, audio, and video are still sent as Feishu attachments. |
 
 This shared-chat behavior is controlled by `config.yaml`:
 
@@ -49,7 +50,8 @@ If scan-to-create is not available, the wizard falls back to manual input:
 2. Create a new app.
 3. In **Credentials & Basic Info**, copy the **App ID** and **App Secret**.
 4. Enable the **Bot** capability for the app.
-5. Run `hermes gateway setup`, select **Feishu / Lark**, and enter the credentials when prompted.
+5. Grant message send/read permissions and `im:message:update`. The update permission is required for streamed card edits.
+6. Run `hermes gateway setup`, select **Feishu / Lark**, and enter the credentials when prompted.
 
 :::warning
 Keep the App Secret private. Anyone with it can impersonate your app.
