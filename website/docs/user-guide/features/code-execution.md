@@ -20,7 +20,7 @@ The `execute_code` tool lets the agent write Python scripts that call Hermes too
 # The agent can write scripts like:
 from hermes_tools import web_search, web_extract
 
-results = web_search("Python 3.13 features", limit=5)
+results = web_search("Python 3.13 features")
 for r in results["data"]["web"]:
     content = web_extract([r["url"]])
     # ... filter and process ...
@@ -64,7 +64,7 @@ from hermes_tools import web_search, web_extract
 import json
 
 # Search, extract, and summarize in one turn
-results = web_search("Rust async runtime comparison 2025", limit=5)
+results = web_search("Rust async runtime comparison 2025")
 summaries = []
 for r in results["data"]["web"]:
     page = web_extract([r["url"]])

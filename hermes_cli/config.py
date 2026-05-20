@@ -1894,6 +1894,23 @@ OPTIONAL_ENV_VARS = {
         "password": True,
         "category": "tool",
     },
+    "GEMINI_GROUNDING_API_KEY": {
+        "description": "Gemini API key for the google_search grounding tool (separate from GEMINI_API_KEY for billing isolation)",
+        "prompt": "Gemini grounding API key",
+        "url": "https://aistudio.google.com/app/apikey",
+        "tools": ["web_search"],
+        "password": True,
+        "category": "tool",
+    },
+    "GEMINI_GROUNDING_MODEL": {
+        "description": "Gemini model to use for grounding (defaults to gemini-3.1-flash-lite)",
+        "prompt": "Gemini grounding model (leave empty for default)",
+        "url": None,
+        "tools": ["web_search"],
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
     "BROWSERBASE_API_KEY": {
         "description": "Browserbase API key for cloud browser (optional — local browser works without this)",
         "prompt": "Browserbase API key",

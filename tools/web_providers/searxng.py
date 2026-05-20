@@ -47,7 +47,7 @@ class SearXNGSearchProvider(WebSearchProvider):
         """Return True when ``SEARXNG_URL`` is set to a non-empty value."""
         return bool(os.getenv("SEARXNG_URL", "").strip())
 
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """Execute a search against the configured SearXNG instance.
 
         Returns normalized results::

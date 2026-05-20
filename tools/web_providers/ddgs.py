@@ -56,7 +56,7 @@ class DDGSSearchProvider(WebSearchProvider):
         except ImportError:
             return False
 
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """Execute a DuckDuckGo search and return normalized results.
 
         Returns ``{"success": True, "data": {"web": [...]}}`` on success or

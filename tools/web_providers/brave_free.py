@@ -48,7 +48,7 @@ class BraveFreeSearchProvider(WebSearchProvider):
         """Return True when ``BRAVE_SEARCH_API_KEY`` is set to a non-empty value."""
         return bool(os.getenv("BRAVE_SEARCH_API_KEY", "").strip())
 
-    def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """Execute a search against the Brave Search API.
 
         Returns normalized results::

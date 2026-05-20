@@ -459,7 +459,7 @@ class TestWebSearchSchema:
         assert limit_schema["type"] == "integer"
         assert limit_schema["minimum"] == 1
         assert limit_schema["maximum"] == 100
-        assert limit_schema["default"] == 5
+        assert limit_schema["default"] == 100
         assert "limit" not in tools.web_tools.WEB_SEARCH_SCHEMA["parameters"]["required"]
 
     def test_registered_handler_passes_limit(self):
@@ -472,7 +472,7 @@ class TestWebSearchSchema:
         assert result == '{"success": true}'
         mock_search.assert_called_once_with("site:example.com docs", limit=12)
 
-    def test_registered_handler_defaults_limit_to_five(self):
+    def test_registered_handler_defaults_limit_to_100(self):
         import tools.web_tools
 
         entry = tools.web_tools.registry.get_entry("web_search")
@@ -480,7 +480,7 @@ class TestWebSearchSchema:
             result = entry.handler({"query": "docs"})
 
         assert result == '{"success": true}'
-        mock_search.assert_called_once_with("docs", limit=5)
+        mock_search.assert_called_once_with("docs", limit=100)
 
     def test_web_search_clamps_limit_before_backend_call(self):
         import tools.web_tools

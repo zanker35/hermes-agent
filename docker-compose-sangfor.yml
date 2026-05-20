@@ -1,0 +1,80 @@
+#
+# Sangfor-mirrored local Docker test stack for Hermes Agent.
+#
+# Build:
+#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose -f docker-compose-sangfor.yml build
+#
+# Start:
+#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose -f docker-compose-sangfor.yml up -d
+#
+# Runtime traffic defaults to Docker Desktop's host gateway on port 7890 so
+# Gemini grounding/search can reach Google APIs. Override with:
+#   HERMES_RUNTIME_PROXY=http://192.168.65.254:7890
+#
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile_sangfor.yaml
+      args:
+        HTTP_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        HTTPS_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        ALL_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        http_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        https_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        all_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        NO_PROXY: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+        no_proxy: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+    image: hermes-agent:sangfor
+    container_name: hermes
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ~/.hermes:/opt/data
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HTTP_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      HTTPS_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      ALL_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      http_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      https_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      all_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      NO_PROXY: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+      no_proxy: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+    command: ["gateway", "run"]
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile_sangfor.yaml
+      args:
+        HTTP_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        HTTPS_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        ALL_PROXY: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        http_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        https_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        all_proxy: ${HERMES_BUILD_PROXY:-http://host.docker.internal:7890}
+        NO_PROXY: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+        no_proxy: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+    image: hermes-agent:sangfor
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9119:9119"
+    depends_on:
+      - gateway
+    volumes:
+      - ~/.hermes:/opt/data
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HTTP_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      HTTPS_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      ALL_PROXY: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      http_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      https_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      all_proxy: ${HERMES_RUNTIME_PROXY:-http://192.168.65.254:7890}
+      NO_PROXY: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+      no_proxy: ${HERMES_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,.sangfor.com,.sangfor.org}
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"]
